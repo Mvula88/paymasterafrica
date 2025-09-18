@@ -1,0 +1,18 @@
+{
+  "buildCommand": "npm run build",
+  "framework": "nextjs",
+  "outputDirectory": ".next",
+  "regions": ["cpt1"],
+  "env": {
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY": "@clerk_publishable_key",
+    "NEXT_PUBLIC_SUPABASE_URL": "@supabase_url",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "@supabase_anon_key"
+  },
+  "build": {
+    "env": {
+      "CLERK_SECRET_KEY": "@clerk_secret_key",
+      "DATABASE_URL": "@database_url",
+      "SUPABASE_SERVICE_KEY": "@supabase_service_key"
+    }
+  }
+}

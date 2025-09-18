@@ -1,0 +1,411 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Country {
+  NA // Namibia
+  ZA // South Africa
+}
+
+enum PayFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+  ANNUALLY
+}
+
+enum PayrollStatus {
+  DRAFT
+  LOCKED
+  APPROVED
+  PROCESSING
+  PROCESSED
+  PAID
+  CANCELLED
+}
+
+enum UserRole {
+  OWNER
+  ADMIN
+  PAYROLL_OFFICER
+  EMPLOYEE
+}
+
+enum DocumentType {
+  PAYSLIP
+  PAYE5
+  IRP5
+  IT3A
+  EMP201
+  EMP501
+  SSC_RETURN
+  UIF_RETURN
+  SDL_RETURN
+  VET_RETURN
+}
+
+model Organization {
+  id                String          @id @default(cuid())
+  clerkOrgId        String          @unique
+  name              String
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  companies         Company[]
+  users             User[]
+}
+
+model User {
+  id                String          @id @default(cuid())
+  clerkUserId       String          @unique
+  email             String
+  firstName         String?
+  lastName          String?
+  role              UserRole        @default(EMPLOYEE)
+  organizationId    String
+  organization      Organization    @relation(fields: [organizationId], references: [id])
+  employeeProfile   Employee?
+  auditLogs         AuditLog[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([organizationId])
+  @@index([clerkUserId])
+}
+
+model Company {
+  id                String          @id @default(cuid())
+  organizationId    String
+  organization      Organization    @relation(fields: [organizationId], references: [id])
+  name              String
+  registrationNumber String?
+  taxNumber         String?
+  country           Country
+  payFrequency      PayFrequency    @default(MONTHLY)
+
+  // Address
+  addressLine1      String?
+  addressLine2      String?
+  city              String?
+  state             String?
+  postalCode        String?
+
+  // Settings
+  vetLevyApplicable Boolean         @default(false) // Namibia: annual payroll >= N$1m
+  sdlApplicable     Boolean         @default(false) // South Africa: 1% SDL
+  uifApplicable     Boolean         @default(true)  // South Africa: UIF
+
+  // Branding
+  logoUrl           String?
+  primaryColor      String          @default("#1e40af")
+
+  employees         Employee[]
+  payrollPeriods    PayrollPeriod[]
+  taxPacks          TaxPack[]
+  bankBatches       BankBatch[]
+  statutoryReturns  StatutoryReturn[]
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([organizationId])
+}
+
+model Employee {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  userId            String?         @unique
+  user              User?           @relation(fields: [userId], references: [id])
+
+  // Personal Info
+  employeeNumber    String
+  firstName         String
+  lastName          String
+  email             String
+  phone             String?
+
+  // ID & Tax
+  nationalId        String          // ID/Passport number
+  taxNumber         String?         // PAYE number (Namibia) or Tax number (SA)
+
+  // Employment
+  hireDate          DateTime
+  terminationDate   DateTime?
+  isActive          Boolean         @default(true)
+
+  // Banking
+  bankName          String?
+  bankAccountNumber String?
+  bankBranchCode    String?
+  bankAccountType   String?
+
+  // Payroll Settings
+  basicSalary       Float
+  hourlySalary      Float?
+
+  // Tax Settings
+  sscApplicable     Boolean         @default(true)  // Namibia
+  uifApplicable     Boolean         @default(true)  // South Africa
+  sdlApplicable     Boolean         @default(false) // South Africa
+
+  // Relationships
+  payslips          Payslip[]
+  leaveBalances     LeaveBalance[]
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([companyId])
+  @@index([userId])
+  @@unique([companyId, employeeNumber])
+}
+
+model TaxPack {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  country           Country
+  year              Int
+  month             Int
+
+  // Tax brackets stored as JSON
+  payeBrackets      Json            // Array of {min, max, rate, fixedAmount}
+
+  // Namibia specific
+  sscEmployeeRate   Float?          // 0.9%
+  sscEmployerRate   Float?          // 0.9%
+  sscMinCeiling     Float?          // N$500
+  sscMaxCeiling     Float?          // N$11,000
+  vetLevyRate       Float?          // 1% if applicable
+
+  // South Africa specific
+  uifEmployeeRate   Float?          // 1%
+  uifEmployerRate   Float?          // 1%
+  uifMaxCeiling     Float?          // Capped remuneration
+  sdlRate           Float?          // 1%
+
+  effectiveFrom     DateTime
+  effectiveTo       DateTime?
+  isActive          Boolean         @default(true)
+
+  payrollPeriods    PayrollPeriod[]
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([companyId])
+  @@index([country, year, month])
+  @@unique([companyId, country, year, month])
+}
+
+model PayrollPeriod {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  taxPackId         String
+  taxPack           TaxPack         @relation(fields: [taxPackId], references: [id])
+
+  periodStart       DateTime
+  periodEnd         DateTime
+  status            PayrollStatus   @default(DRAFT)
+
+  // FX rates if needed
+  exchangeRate      Float           @default(1.0)
+
+  // Summary
+  totalGross        Float           @default(0)
+  totalNet          Float           @default(0)
+  totalPaye         Float           @default(0)
+  totalDeductions   Float           @default(0)
+  totalEmployerCost Float           @default(0)
+
+  // Approval
+  approvedBy        String?
+  approvedAt        DateTime?
+  paidAt            DateTime?
+
+  payslips          Payslip[]
+  bankBatches       BankBatch[]
+  statutoryReturns  StatutoryReturn[]
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([companyId])
+  @@index([status])
+  @@index([periodStart, periodEnd])
+}
+
+model Payslip {
+  id                String          @id @default(cuid())
+  payrollPeriodId   String
+  payrollPeriod     PayrollPeriod   @relation(fields: [payrollPeriodId], references: [id])
+  employeeId        String
+  employee          Employee        @relation(fields: [employeeId], references: [id])
+
+  // Earnings
+  basicSalary       Float
+  overtime          Float           @default(0)
+  bonuses           Float           @default(0)
+  allowances        Float           @default(0)
+  grossSalary       Float
+  taxableIncome     Float
+
+  // Deductions
+  paye              Float
+  ssc               Float           @default(0) // Namibia
+  uif               Float           @default(0) // South Africa
+  medicalAid        Float           @default(0)
+  pension           Float           @default(0)
+  otherDeductions   Float           @default(0)
+  totalDeductions   Float
+
+  // Employer Contributions
+  employerSsc       Float           @default(0) // Namibia
+  employerUif       Float           @default(0) // South Africa
+  employerSdl       Float           @default(0) // South Africa
+  employerVet       Float           @default(0) // Namibia
+  totalEmployerCost Float
+
+  netSalary         Float
+
+  // Line items for detailed breakdown
+  lineItems         LineItem[]
+
+  // Document
+  pdfUrl            String?
+  emailedAt         DateTime?
+  viewedAt          DateTime?
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([payrollPeriodId])
+  @@index([employeeId])
+  @@unique([payrollPeriodId, employeeId])
+}
+
+model LineItem {
+  id                String          @id @default(cuid())
+  payslipId         String
+  payslip           Payslip         @relation(fields: [payslipId], references: [id], onDelete: Cascade)
+
+  type              String          // EARNING, DEDUCTION, EMPLOYER_CONTRIBUTION
+  code              String
+  description       String
+  amount            Float
+  quantity          Float           @default(1)
+  rate              Float?
+
+  createdAt         DateTime        @default(now())
+
+  @@index([payslipId])
+}
+
+model StatutoryReturn {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  payrollPeriodId   String?
+  payrollPeriod     PayrollPeriod?  @relation(fields: [payrollPeriodId], references: [id])
+
+  type              DocumentType
+  year              Int
+  month             Int?            // For monthly returns
+
+  // Amounts
+  totalPaye         Float?
+  totalSsc          Float?          // Namibia
+  totalUif          Float?          // South Africa
+  totalSdl          Float?          // South Africa
+  totalVet          Float?          // Namibia
+
+  // Status
+  status            String          @default("DRAFT") // DRAFT, SUBMITTED, ACCEPTED, REJECTED
+  submittedAt       DateTime?
+  referenceNumber   String?
+
+  // Files
+  documentUrl       String?
+  exportData        Json?           // For electronic submissions
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([companyId])
+  @@index([type, year, month])
+}
+
+model BankBatch {
+  id                String          @id @default(cuid())
+  companyId         String
+  company           Company         @relation(fields: [companyId], references: [id])
+  payrollPeriodId   String
+  payrollPeriod     PayrollPeriod   @relation(fields: [payrollPeriodId], references: [id])
+
+  batchNumber       String
+  bankName          String
+  totalAmount       Float
+  transactionCount  Int
+
+  // File details
+  fileFormat        String          // CSV, PAIN001, etc
+  fileName          String
+  fileUrl           String?
+
+  status            String          @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  processedAt       DateTime?
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([companyId])
+  @@index([payrollPeriodId])
+}
+
+model LeaveBalance {
+  id                String          @id @default(cuid())
+  employeeId        String
+  employee          Employee        @relation(fields: [employeeId], references: [id])
+
+  leaveType         String          // ANNUAL, SICK, MATERNITY, etc
+  entitlement       Float
+  taken             Float           @default(0)
+  balance           Float
+  year              Int
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@index([employeeId])
+  @@unique([employeeId, leaveType, year])
+}
+
+model AuditLog {
+  id                String          @id @default(cuid())
+  userId            String?
+  user              User?           @relation(fields: [userId], references: [id])
+
+  action            String
+  entityType        String
+  entityId          String
+
+  beforeData        Json?
+  afterData         Json?
+  metadata          Json?
+
+  ipAddress         String?
+  userAgent         String?
+
+  createdAt         DateTime        @default(now())
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

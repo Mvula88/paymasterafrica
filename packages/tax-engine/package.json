@@ -1,0 +1,19 @@
+{
+  "name": "@paymaster/tax-engine",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "scripts": {
+    "test": "vitest",
+    "build": "tsc"
+  },
+  "dependencies": {
+    "date-fns": "^3.0.6",
+    "decimal.js": "^10.4.3"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.3",
+    "vitest": "^1.1.3"
+  }
+}
