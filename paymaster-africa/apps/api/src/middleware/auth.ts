@@ -1,14 +1,18 @@
 import { Request, Response, NextFunction } from 'express';
-import { Clerk } from '@clerk/backend';
+import { createClient } from '@supabase/supabase-js';
 import { PrismaClient, UserRole } from '@prisma/client';
 
-const clerk = new Clerk({ secretKey: process.env.CLERK_SECRET_KEY! });
 const prisma = new PrismaClient();
+
+const supabase = createClient(
+  process.env.SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY!
+);
 
 export interface AuthRequest extends Request {
   auth?: {
     userId: string;
-    sessionId: string;
+    email: string;
     orgId?: string;
     user?: any;
   };
@@ -20,37 +24,61 @@ export const authenticate = async (
   next: NextFunction
 ) => {
   try {
-    const sessionToken = req.headers.authorization?.replace('Bearer ', '');
+    const token = req.headers.authorization?.replace('Bearer ', '');
 
-    if (!sessionToken) {
+    if (!token) {
       return res.status(401).json({ error: 'No authorization token provided' });
     }
 
-    const session = await clerk.sessions.verifySession({
-      sessionId: sessionToken,
-      token: sessionToken,
-    });
+    // Verify the JWT token with Supabase
+    const { data: { user }, error } = await supabase.auth.getUser(token);
 
-    if (!session) {
-      return res.status(401).json({ error: 'Invalid session' });
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid token' });
     }
 
     // Get user from database
-    const user = await prisma.user.findUnique({
-      where: { clerkUserId: session.userId },
+    const dbUser = await prisma.user.findUnique({
+      where: { clerk_user_id: user.id }, // Using clerk_user_id field to store Supabase user ID
       include: { organization: true },
     });
 
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    if (!dbUser) {
+      // Create user if doesn't exist (first time login)
+      const org = await prisma.organization.findFirst() ||
+        await prisma.organization.create({
+          data: {
+            name: 'Default Organization',
+            clerkOrgId: `org_${user.id}`,
+          }
+        });
 
-    req.auth = {
-      userId: session.userId,
-      sessionId: session.id,
-      orgId: user.organizationId,
-      user,
-    };
+      const newUser = await prisma.user.create({
+        data: {
+          clerkUserId: user.id,
+          email: user.email!,
+          firstName: user.user_metadata?.first_name || '',
+          lastName: user.user_metadata?.last_name || '',
+          organizationId: org.id,
+          role: UserRole.EMPLOYEE,
+        },
+        include: { organization: true }
+      });
+
+      req.auth = {
+        userId: user.id,
+        email: user.email!,
+        orgId: newUser.organizationId,
+        user: newUser,
+      };
+    } else {
+      req.auth = {
+        userId: user.id,
+        email: user.email!,
+        orgId: dbUser.organizationId,
+        user: dbUser,
+      };
+    }
 
     next();
   } catch (error) {
